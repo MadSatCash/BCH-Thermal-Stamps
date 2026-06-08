@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.png" alt="BCH Thermal Stamps" width="900">
+</p>
+
 # BCH Thermal Stamps
 
 Aplicacion de escritorio (Windows) para crear estampas imprimibles de Bitcoin
