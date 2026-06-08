@@ -4,6 +4,16 @@ Aplicacion de escritorio (Windows) para crear estampas imprimibles de Bitcoin
 Cash y gestionarlas una por una. Cada estampa es un vale real: lleva su propia
 clave BCH y un QR de cobro que cualquiera puede escanear para barrer los fondos.
 
+## Capturas de pantalla
+
+### Crear estampas
+
+![Crear estampas](docs/create-stamps.png)
+
+### Administrar estampas
+
+![Administrar estampas](docs/manage-stamps.png)
+
 ## Idea
 
 - La unidad es **una estampa**. Crear "varias" es solo repetir la creacion N veces.
