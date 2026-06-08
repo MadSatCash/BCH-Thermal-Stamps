@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# Claude
+.claude/
+
+# Runtime data
+app/data/
+
+# Build artifacts
+build/
+dist/
+
+# Windows
+Thumbs.db
+Desktop.ini
