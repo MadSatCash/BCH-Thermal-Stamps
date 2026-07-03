@@ -9,6 +9,7 @@ on-chain balance, and recovery actions).
 
 from __future__ import annotations
 
+import ctypes
 import datetime
 import json
 import os
@@ -23,11 +24,11 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from PIL import Image, ImageTk
 
 if __package__ in (None, ""):
-    sys.path.append(str(Path(__file__).resolve().parent.parent))
-    from app import wallet
-    from app.qrgen import make_qr_image
-    from app.renderer import StampDesign, render_stamp
-    from app.storage import (
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import wallet
+    from qrgen import make_qr_image
+    from renderer import StampDesign, render_stamp
+    from storage import (
         DATA_DIR,
         STATUS_CREATED,
         STATUS_EMPTY,
@@ -52,6 +53,15 @@ else:
 
 
 APP_TITLE = "BCH Thermal Stamps"
+
+SECTION_CONFIGS = {
+    "title": ("title_enabled", "Titulo", [("title", "Texto")], None),
+    "wallet": ("wallet_enabled", "QR instalar wallet", [("wallet_label", "Etiqueta"), ("wallet_qr_data", "Enlace (URL)")], None),
+    "claim": ("claim_enabled", "QR cobrar", [("claim_label", "Etiqueta")], "El QR se completa con la clave de cada estampa."),
+    "instructions": ("instructions_enabled", "Texto instructivo", [("instructions", "Instrucciones", "text")], None),
+    "details": ("details_enabled", "Detalles", [("amount", "Monto (BCH)"), ("expiry", "Vencimiento"), ("footer_note", "Nota final")], None),
+    "separator": ("separator_enabled", "Separador", [], None),
+}
 
 
 class ScrollableFrame(ttk.Frame):
@@ -86,7 +96,7 @@ class ThermalStampsApp(tk.Tk):
         self.geometry("1280x960")
         self.minsize(1120, 700)
         self.state("zoomed")
-        self.configure(bg="#f2f4f5")
+        self.configure(bg="#f0f2f5")
 
         self.storage = Storage()
         self.design = StampDesign()
@@ -102,6 +112,10 @@ class ThermalStampsApp(tk.Tk):
 
         self._vars: dict[str, tk.Variable] = {}
         self._text_widgets: dict[str, tk.Text] = {}
+        self._section_cards: list[tuple[tk.Frame, str]] = []
+        self._drag_data: dict | None = None
+        self._zoom_pct = 100
+        self._pan_data: dict | None = None
         self._build_style()
         self._build_layout()
         self._render_preview()
@@ -117,27 +131,76 @@ class ThermalStampsApp(tk.Tk):
         style = ttk.Style(self)
         if "clam" in style.theme_names():
             style.theme_use("clam")
-        style.configure("TFrame", background="#f2f4f5")
-        style.configure("Panel.TFrame", background="#ffffff")
-        style.configure("TLabel", background="#f2f4f5", foreground="#182025", font=("Segoe UI", 10))
-        style.configure("Panel.TLabel", background="#ffffff", foreground="#182025", font=("Segoe UI", 10))
-        style.configure("Title.TLabel", background="#ffffff", foreground="#111719", font=("Segoe UI", 15, "bold"))
-        style.configure("Muted.TLabel", background="#ffffff", foreground="#637077", font=("Segoe UI", 9))
-        style.configure("Mono.TLabel", background="#ffffff", foreground="#182025", font=("Consolas", 9))
-        style.configure("TButton", font=("Segoe UI", 10), padding=(10, 7))
-        style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(12, 9))
+
+        BG = "#f0f2f5"
+        CARD = "#ffffff"
+        BORDER = "#d1d5db"
+        ACCENT = "#2563eb"
+        ACCENT_HOVER = "#1d4ed8"
+        TEXT = "#111827"
+        TEXT_2 = "#374151"
+        MUTED = "#6b7280"
+
+        style.configure("TFrame", background=BG)
+        style.configure("Panel.TFrame", background=CARD)
+
+        style.configure("TLabel", background=BG, foreground=TEXT, font=("Segoe UI", 10))
+        style.configure("Panel.TLabel", background=CARD, foreground=TEXT_2, font=("Segoe UI", 10))
+        style.configure("Title.TLabel", background=CARD, foreground=TEXT, font=("Segoe UI", 15, "bold"))
+        style.configure("Muted.TLabel", background=CARD, foreground=MUTED, font=("Segoe UI", 9))
+        style.configure("Mono.TLabel", background=CARD, foreground=TEXT_2, font=("Consolas", 9))
+        style.configure("Arrow.TLabel", background=CARD, foreground=MUTED, font=("Segoe UI", 16))
+        style.configure("Handle.TLabel", background=CARD, foreground="#9ca3af", font=("Segoe UI", 16))
+
+        style.configure("Card.TLabelframe", background=CARD, bordercolor=BORDER,
+                        lightcolor=BORDER, darkcolor=BORDER, borderwidth=1, relief="solid")
+        style.configure("Card.TLabelframe.Label", background=CARD, foreground=TEXT,
+                        font=("Segoe UI", 10, "bold"))
+
+        style.configure("TButton", font=("Segoe UI", 10), padding=(12, 8),
+                        background=CARD, bordercolor=BORDER, focuscolor=ACCENT)
+        style.map("TButton", background=[("active", "#f3f4f6"), ("pressed", "#e5e7eb")])
+
+        style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(14, 10),
+                        background=ACCENT, foreground="#ffffff", bordercolor=ACCENT)
+        style.map("Primary.TButton",
+                  background=[("active", ACCENT_HOVER), ("pressed", ACCENT_HOVER)],
+                  foreground=[("active", "#ffffff"), ("pressed", "#ffffff")])
+
         style.configure("Danger.TButton", font=("Segoe UI", 10), padding=(10, 7))
-        style.map("Danger.TButton", foreground=[("!disabled", "#9b1c1c")])
-        style.configure("Mode.TButton", font=("Segoe UI", 12, "bold"), padding=(22, 14))
-        style.configure("ModeActive.TButton", font=("Segoe UI", 12, "bold"), padding=(22, 14),
-                        background="#1f6feb", foreground="#ffffff")
+        style.map("Danger.TButton", foreground=[("!disabled", "#dc2626")])
+
+        style.configure("Mode.TButton", font=("Segoe UI", 12, "bold"), padding=(24, 14),
+                        background=CARD, foreground=TEXT_2, bordercolor=BORDER)
+        style.map("Mode.TButton", background=[("active", "#f3f4f6")])
+
+        style.configure("ModeActive.TButton", font=("Segoe UI", 12, "bold"), padding=(24, 14),
+                        background=ACCENT, foreground="#ffffff", bordercolor=ACCENT)
         style.map("ModeActive.TButton",
-                  background=[("active", "#1f6feb"), ("pressed", "#1f6feb"), ("disabled", "#1f6feb")],
+                  background=[("active", ACCENT), ("pressed", ACCENT), ("disabled", ACCENT)],
                   foreground=[("active", "#ffffff"), ("pressed", "#ffffff"), ("disabled", "#ffffff")])
-        style.configure("StatusBar.TLabel", background="#f2f4f5", foreground="#637077", font=("Segoe UI", 9))
-        style.configure("TCheckbutton", background="#ffffff", foreground="#182025", font=("Segoe UI", 10))
-        style.configure("Treeview", font=("Segoe UI", 9), rowheight=24)
-        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
+
+        style.configure("StatusBar.TLabel", background=BG, foreground=MUTED, font=("Segoe UI", 9))
+
+        style.configure("TCheckbutton", background=CARD, foreground=TEXT, font=("Segoe UI", 10))
+        style.configure("Section.TCheckbutton", background=CARD, foreground=TEXT,
+                        font=("Segoe UI", 10, "bold"))
+
+        style.configure("Treeview", font=("Segoe UI", 9), rowheight=28,
+                        background=CARD, fieldbackground=CARD, bordercolor=BORDER)
+        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"),
+                        background="#f8f9fa", foreground=TEXT_2)
+        style.map("Treeview", background=[("selected", "#dbeafe")],
+                  foreground=[("selected", TEXT)])
+
+        style.configure("TEntry", fieldbackground=CARD, bordercolor=BORDER,
+                        lightcolor=BORDER, darkcolor=BORDER)
+        style.map("TEntry", bordercolor=[("focus", ACCENT)],
+                  lightcolor=[("focus", ACCENT)])
+
+        style.configure("TSeparator", background=BORDER)
+        style.configure("TSpinbox", fieldbackground=CARD, bordercolor=BORDER,
+                        lightcolor=BORDER, darkcolor=BORDER)
 
     # -- layout ----------------------------------------------------------------
 
@@ -165,16 +228,29 @@ class ThermalStampsApp(tk.Tk):
         )
 
     def _build_mode_bar(self, parent) -> None:
-        # The two workspaces are mutually exclusive full views, so the switcher
-        # between them is the app's primary navigation - kept big and always
-        # visible rather than tucked into a menu or tab strip.
         bar = ttk.Frame(parent)
-        bar.grid(row=0, column=0, sticky="w", pady=(0, 12))
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        bar.columnconfigure(2, weight=1)
+
         self.mode_buttons: dict[str, ttk.Button] = {}
         for i, (mode, text) in enumerate((("crear", "Crear estampas"), ("administrar", "Administrar estampas"))):
             btn = ttk.Button(bar, text=text, style="Mode.TButton", command=lambda m=mode: self._set_mode(m))
             btn.grid(row=0, column=i, sticky="w", padx=(0 if i == 0 else 12, 0))
             self.mode_buttons[mode] = btn
+
+        self._preview_header = ttk.Frame(bar)
+        self._preview_header.grid(row=0, column=2, sticky="e")
+
+        ttk.Label(self._preview_header, text="Vista previa", style="Muted.TLabel").pack(side="left", padx=(0, 8))
+        small_font = ("Segoe UI", 9)
+        ttk.Button(self._preview_header, text="−", width=2, command=lambda: self._zoom_step(-10)).pack(side="left")
+        self._zoom_var = tk.StringVar(value="100%")
+        zoom_entry = ttk.Entry(self._preview_header, textvariable=self._zoom_var, width=5, justify="center", font=small_font)
+        zoom_entry.pack(side="left", padx=2)
+        zoom_entry.bind("<Return>", self._zoom_from_entry)
+        ttk.Button(self._preview_header, text="+", width=2, command=lambda: self._zoom_step(10)).pack(side="left")
+        ttk.Button(self._preview_header, text="Reset", command=self._zoom_reset).pack(side="left", padx=(4, 0))
+
         self._update_mode_buttons()
 
     def _update_mode_buttons(self) -> None:
@@ -188,9 +264,11 @@ class ThermalStampsApp(tk.Tk):
         if mode == "crear":
             self.administrar_view.grid_remove()
             self.crear_view.grid()
+            self._preview_header.grid()
         else:
             self.crear_view.grid_remove()
             self.administrar_view.grid()
+            self._preview_header.grid_remove()
             self._populate_manage_panel()
         self._update_mode_buttons()
 
@@ -215,10 +293,13 @@ class ThermalStampsApp(tk.Tk):
         self.left_panel.configure(padding=14)
         self.left_panel.columnconfigure(0, weight=1)
 
+        add_btn = ttk.Button(left_wrap, text="+ Agregar bloque", command=self._add_block)
+        add_btn.grid(row=1, column=0, sticky="ew", padx=14, pady=(8, 14))
+
         self.center_panel = ttk.Frame(view, padding=0)
         self.center_panel.grid(row=0, column=1, sticky="nsew")
         self.center_panel.columnconfigure(0, weight=1)
-        self.center_panel.rowconfigure(1, weight=1)
+        self.center_panel.rowconfigure(0, weight=1)
 
         right_wrap = ttk.Frame(view, style="Panel.TFrame")
         right_wrap.grid(row=0, column=2, sticky="nsew", padx=(10, 0))
@@ -237,33 +318,42 @@ class ThermalStampsApp(tk.Tk):
         ttk.Label(p, text="Plantilla", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(p, text="Define como se ve cada estampa.", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 14))
 
-        row = 2
-        row = self._block_section(p, row, "title_enabled", "Titulo", [("title", "Texto")])
-        row = self._block_section(p, row, "wallet_enabled", "QR instalar wallet", [("wallet_label", "Etiqueta"), ("wallet_qr_data", "Enlace (URL)")])
-        row = self._block_section(p, row, "claim_enabled", "QR cobrar", [("claim_label", "Etiqueta")], note="El QR se completa con la clave de cada estampa.")
-        row = self._block_section(p, row, "instructions_enabled", "Texto instructivo", [("instructions", "Instrucciones", "text")])
-        row = self._block_section(p, row, "details_enabled", "Detalles", [("amount", "Monto (BCH)"), ("expiry", "Vencimiento"), ("footer_note", "Nota final")])
-        self.left_panel.rowconfigure(row, weight=1)
+        self._section_cards = []
+        for i, key in enumerate(self.design.section_order):
+            if key in SECTION_CONFIGS:
+                enabled_key, title, fields, note = SECTION_CONFIGS[key]
+                self._block_section(p, 2 + i, enabled_key, title, fields, note=note, section_key=key)
+            else:
+                block = next((b for b in self.design.custom_blocks if b["id"] == key), None)
+                if block:
+                    self._build_custom_block_card(p, 2 + i, block)
+        self.left_panel.rowconfigure(2 + len(self.design.section_order), weight=1)
 
     def _build_center_panel(self) -> None:
-        # The preview is the centerpiece of "Crear estampas": it owns the entire
-        # center column, top to bottom, and the stamp is centered within it.
-        self.center_panel.rowconfigure(0, weight=0)
-        self.center_panel.rowconfigure(1, weight=1)
+        self.center_panel.rowconfigure(0, weight=1)
 
-        header = ttk.Frame(self.center_panel)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        header.columnconfigure(0, weight=1)
-        ttk.Label(header, text="Vista previa termica 58 mm", font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Label(header, text="Ancho base: 384 px", foreground="#637077").grid(row=0, column=1, sticky="e")
-
-        canvas_frame = ttk.Frame(self.center_panel, padding=8)
-        canvas_frame.grid(row=1, column=0, sticky="nsew")
+        canvas_frame = ttk.Frame(self.center_panel, padding=0)
+        canvas_frame.grid(row=0, column=0, sticky="nsew")
         canvas_frame.columnconfigure(0, weight=1)
         canvas_frame.rowconfigure(0, weight=1)
-        self.preview_canvas = tk.Canvas(canvas_frame, bg="#dfe5e7", highlightthickness=0)
+        self.preview_canvas = tk.Canvas(canvas_frame, bg="#e5e7eb", highlightthickness=0)
         self.preview_canvas.grid(row=0, column=0, sticky="nsew")
         self.preview_canvas.bind("<Configure>", lambda _e: self._render_preview())
+
+        def _bind_canvas_wheel(_e):
+            self.preview_canvas.bind_all("<Control-MouseWheel>", self._zoom_wheel)
+            self.preview_canvas.bind_all("<MouseWheel>", self._canvas_scroll)
+        def _unbind_canvas_wheel(_e):
+            self.preview_canvas.unbind_all("<Control-MouseWheel>")
+            self.preview_canvas.unbind_all("<MouseWheel>")
+        self.preview_canvas.bind("<Enter>", _bind_canvas_wheel)
+        self.preview_canvas.bind("<Leave>", _unbind_canvas_wheel)
+        self.preview_canvas.bind("<ButtonPress-2>", self._pan_press)
+        self.preview_canvas.bind("<B2-Motion>", self._pan_motion)
+        self.preview_canvas.bind("<ButtonPress-1>", self._pan_press)
+        self.preview_canvas.bind("<B1-Motion>", self._pan_motion)
+        self.preview_canvas.bind("<ButtonRelease-1>", lambda _e: self._pan_end())
+        self.preview_canvas.bind("<ButtonRelease-2>", lambda _e: self._pan_end())
 
     def _build_create_panel(self) -> None:
         p = self.create_panel
@@ -382,7 +472,7 @@ class ThermalStampsApp(tk.Tk):
         image_frame.grid(row=1, column=0, sticky="nsew")
         image_frame.columnconfigure(0, weight=1)
         image_frame.rowconfigure(0, weight=1)
-        self.detail_image_canvas = tk.Canvas(image_frame, bg="#dfe5e7", highlightthickness=0)
+        self.detail_image_canvas = tk.Canvas(image_frame, bg="#e5e7eb", highlightthickness=0)
         self.detail_image_canvas.grid(row=0, column=0, sticky="nsew")
         self.detail_image_canvas.bind("<Configure>", lambda _e: self._render_stamp_image())
 
@@ -498,24 +588,63 @@ class ThermalStampsApp(tk.Tk):
         sats = round(value * 100_000_000)
         return f"≈ {sats:,} sats".replace(",", ".")
 
-    def _block_section(self, parent, row, enabled_key, title, fields, note: str | None = None):
-        frame = ttk.Frame(parent, style="Panel.TFrame", padding=(0, 0, 0, 8))
-        frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
-        frame.columnconfigure(0, weight=1)
-
+    def _block_section(self, parent, row, enabled_key, title, fields, note: str | None = None, section_key: str | None = None):
         enabled = tk.BooleanVar(value=getattr(self.design, enabled_key))
         self._vars[enabled_key] = enabled
         enabled.trace_add("write", lambda *_a: self._sync_and_preview())
-        ttk.Checkbutton(frame, text=title, variable=enabled).grid(row=0, column=0, sticky="w")
 
-        field_row = 1
+        expanded = tk.BooleanVar(value=False)
+
+        card = tk.Frame(parent, bg="#ffffff", highlightbackground="#d1d5db", highlightthickness=1)
+        card.grid(row=row, column=0, sticky="ew", pady=(0, 10))
+        card.columnconfigure(0, weight=1)
+
+        header = ttk.Frame(card, style="Panel.TFrame")
+        header.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 10))
+        arrow = ttk.Label(header, text="▸", style="Arrow.TLabel", cursor="hand2")
+        arrow.pack(side="left", padx=(0, 4))
+        cb = ttk.Checkbutton(header, text=title, variable=enabled, style="Section.TCheckbutton")
+        cb.pack(side="left")
+
+        handle = ttk.Label(header, text="≡", style="Handle.TLabel", cursor="fleur")
+        handle.pack(side="right")
+
+        if section_key is not None:
+            self._section_cards.append((card, section_key))
+            handle.bind("<ButtonPress-1>", lambda e, c=card: self._drag_press(e, c))
+            handle.bind("<B1-Motion>", self._drag_motion)
+            handle.bind("<ButtonRelease-1>", self._drag_release)
+
+        content = ttk.Frame(card, style="Panel.TFrame")
+        content.grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 10))
+        content.columnconfigure(0, weight=1)
+        content.grid_remove()
+
+        def toggle(_event=None):
+            if expanded.get():
+                expanded.set(False)
+                arrow.configure(text="▸")
+                content.grid_remove()
+                header.grid_configure(pady=(10, 10))
+            else:
+                expanded.set(True)
+                arrow.configure(text="▾")
+                content.grid()
+                header.grid_configure(pady=(10, 0))
+
+        arrow.bind("<Button-1>", toggle)
+
+        field_row = 0
         for field in fields:
             key = field[0]
             label = field[1]
             kind = field[2] if len(field) > 2 else "entry"
-            ttk.Label(frame, text=label, style="Panel.TLabel").grid(row=field_row, column=0, sticky="w", pady=(5, 2))
+            ttk.Label(content, text=label, style="Panel.TLabel").grid(row=field_row, column=0, sticky="w", pady=(5, 2))
             if kind == "text":
-                widget = tk.Text(frame, height=4, wrap="word", font=("Segoe UI", 10), relief="solid", borderwidth=1)
+                widget = tk.Text(content, height=4, wrap="word", font=("Segoe UI", 10),
+                                 relief="flat", borderwidth=0, bg="#ffffff",
+                                 highlightthickness=1, highlightbackground="#d1d5db",
+                                 highlightcolor="#2563eb", padx=6, pady=6)
                 widget.insert("1.0", getattr(self.design, key))
                 widget.grid(row=field_row + 1, column=0, sticky="ew")
                 widget.bind("<KeyRelease>", lambda _e, name=key, item=widget: self._text_changed(name, item))
@@ -524,22 +653,241 @@ class ThermalStampsApp(tk.Tk):
                 var = tk.StringVar(value=getattr(self.design, key))
                 self._vars[key] = var
                 var.trace_add("write", lambda *_a: self._sync_and_preview())
-                entry = ttk.Entry(frame, textvariable=var)
+                entry = ttk.Entry(content, textvariable=var)
                 if key == "amount":
                     vcmd = (self.register(self._validate_amount_key), "%P")
                     entry.configure(validate="key", validatecommand=vcmd)
                 entry.grid(row=field_row + 1, column=0, sticky="ew")
                 if key == "amount":
                     sats_var = tk.StringVar(value=self._amount_sats_hint(var.get()))
-                    ttk.Label(frame, textvariable=sats_var, style="Muted.TLabel").grid(
+                    ttk.Label(content, textvariable=sats_var, style="Muted.TLabel").grid(
                         row=field_row + 2, column=0, sticky="w", pady=(2, 0)
                     )
                     var.trace_add("write", lambda *_a, v=var, sv=sats_var: sv.set(self._amount_sats_hint(v.get())))
                     field_row += 1
             field_row += 2
         if note:
-            ttk.Label(frame, text=note, style="Muted.TLabel", wraplength=250).grid(row=field_row, column=0, sticky="w", pady=(4, 0))
-        return row + 1
+            ttk.Label(content, text=note, style="Muted.TLabel", wraplength=250).grid(row=field_row, column=0, sticky="w", pady=(4, 0))
+        return card
+
+    def _add_block(self):
+        dialog = tk.Toplevel(self)
+        dialog.title("Agregar bloque")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        frame = ttk.Frame(dialog, padding=20)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Tipo de bloque:", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 10))
+        ttk.Button(frame, text="Texto", command=lambda: self._do_add_block("text", dialog)).pack(fill="x", pady=(0, 6))
+        ttk.Button(frame, text="QR con etiqueta", command=lambda: self._do_add_block("qr", dialog)).pack(fill="x", pady=(0, 6))
+        ttk.Button(frame, text="Separador", command=lambda: self._do_add_block("separator", dialog)).pack(fill="x")
+
+        dialog.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - dialog.winfo_width()) // 2
+        y = self.winfo_y() + (self.winfo_height() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+    def _do_add_block(self, block_type, dialog):
+        dialog.destroy()
+        existing_ids = {b["id"] for b in self.design.custom_blocks}
+        i = 0
+        while f"custom_{i}" in existing_ids:
+            i += 1
+        block_id = f"custom_{i}"
+        if block_type == "text":
+            block = {"id": block_id, "type": "text", "enabled": True, "title": "Texto", "content": ""}
+        elif block_type == "qr":
+            block = {"id": block_id, "type": "qr", "enabled": True, "title": "QR", "qr_label": "", "qr_data": ""}
+        else:
+            block = {"id": block_id, "type": "separator", "enabled": True, "title": "Separador"}
+        self.design.custom_blocks.append(block)
+        self.design.section_order.append(block_id)
+        self._rebuild_template_panel()
+
+    def _remove_block(self, block_id):
+        self.design.custom_blocks = [b for b in self.design.custom_blocks if b["id"] != block_id]
+        self.design.section_order = [k for k in self.design.section_order if k != block_id]
+        self._rebuild_template_panel()
+
+    def _rebuild_template_panel(self):
+        self._sync_design_from_vars()
+        for child in self.left_panel.winfo_children():
+            child.destroy()
+        self._vars.clear()
+        self._text_widgets.clear()
+        self._section_cards = []
+        self._build_template_panel()
+        self._render_preview()
+
+    def _build_custom_block_card(self, parent, row, block):
+        card = tk.Frame(parent, bg="#ffffff", highlightbackground="#d1d5db", highlightthickness=1)
+        card.grid(row=row, column=0, sticky="ew", pady=(0, 10))
+        card.columnconfigure(0, weight=1)
+
+        header = ttk.Frame(card, style="Panel.TFrame")
+        header.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 0))
+
+        expanded = tk.BooleanVar(value=True)
+        arrow = ttk.Label(header, text="▾", style="Arrow.TLabel", cursor="hand2")
+        arrow.pack(side="left", padx=(0, 4))
+
+        enabled = tk.BooleanVar(value=block.get("enabled", True))
+        cb = ttk.Checkbutton(header, text=block.get("title", "Bloque"), variable=enabled, style="Section.TCheckbutton")
+        cb.pack(side="left")
+        enabled.trace_add("write", lambda *_a: self._set_custom_field(block, "enabled", enabled.get()))
+
+        handle = ttk.Label(header, text="≡", style="Handle.TLabel", cursor="fleur")
+        handle.pack(side="right")
+
+        del_btn = ttk.Label(header, text="✕", style="Handle.TLabel", cursor="hand2")
+        del_btn.pack(side="right", padx=(0, 8))
+        del_btn.bind("<Button-1>", lambda _e: self._remove_block(block["id"]))
+
+        self._section_cards.append((card, block["id"]))
+        handle.bind("<ButtonPress-1>", lambda e, c=card: self._drag_press(e, c))
+        handle.bind("<B1-Motion>", self._drag_motion)
+        handle.bind("<ButtonRelease-1>", self._drag_release)
+
+        content = ttk.Frame(card, style="Panel.TFrame")
+        content.grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 10))
+        content.columnconfigure(0, weight=1)
+
+        def toggle(_event=None):
+            if expanded.get():
+                expanded.set(False)
+                arrow.configure(text="▸")
+                content.grid_remove()
+                header.grid_configure(pady=(10, 10))
+            else:
+                expanded.set(True)
+                arrow.configure(text="▾")
+                content.grid()
+                header.grid_configure(pady=(10, 0))
+        arrow.bind("<Button-1>", toggle)
+
+        if block["type"] == "text":
+            ttk.Label(content, text="Texto", style="Panel.TLabel").grid(row=0, column=0, sticky="w", pady=(5, 2))
+            widget = tk.Text(content, height=4, wrap="word", font=("Segoe UI", 10),
+                             relief="flat", borderwidth=0, bg="#ffffff",
+                             highlightthickness=1, highlightbackground="#d1d5db",
+                             highlightcolor="#2563eb", padx=6, pady=6)
+            widget.insert("1.0", block.get("content", ""))
+            widget.grid(row=1, column=0, sticky="ew")
+            widget.bind("<KeyRelease>", lambda _e, b=block, w=widget: self._set_custom_field(b, "content", w.get("1.0", "end").strip()))
+        elif block["type"] == "qr":
+            ttk.Label(content, text="Etiqueta", style="Panel.TLabel").grid(row=0, column=0, sticky="w", pady=(5, 2))
+            label_var = tk.StringVar(value=block.get("qr_label", ""))
+            ttk.Entry(content, textvariable=label_var).grid(row=1, column=0, sticky="ew")
+            label_var.trace_add("write", lambda *_a, b=block, v=label_var: self._set_custom_field(b, "qr_label", v.get()))
+
+            ttk.Label(content, text="Enlace (URL)", style="Panel.TLabel").grid(row=2, column=0, sticky="w", pady=(5, 2))
+            data_var = tk.StringVar(value=block.get("qr_data", ""))
+            ttk.Entry(content, textvariable=data_var).grid(row=3, column=0, sticky="ew")
+            data_var.trace_add("write", lambda *_a, b=block, v=data_var: self._set_custom_field(b, "qr_data", v.get()))
+
+        return card
+
+    def _set_custom_field(self, block, key, value):
+        block[key] = value
+        self._render_preview()
+
+    def _drag_press(self, event, card):
+        idx = next((i for i, (c, _) in enumerate(self._section_cards) if c is card), None)
+        if idx is None:
+            return
+        self._drag_data = {"index": idx, "y": event.y_root, "started": False}
+
+    def _drag_motion(self, event):
+        if not self._drag_data:
+            return
+        if not self._drag_data["started"]:
+            if abs(event.y_root - self._drag_data["y"]) < 10:
+                return
+            self._drag_data["started"] = True
+            card = self._section_cards[self._drag_data["index"]][0]
+            card.configure(highlightbackground="#2563eb", highlightthickness=2)
+        drag_idx = self._drag_data["index"]
+        for i, (c, _) in enumerate(self._section_cards):
+            if i == drag_idx:
+                continue
+            mid = c.winfo_rooty() + c.winfo_height() // 2
+            if i < drag_idx and event.y_root < mid:
+                self._swap_sections(drag_idx, i)
+                self._drag_data["index"] = i
+                break
+            elif i > drag_idx and event.y_root > mid:
+                self._swap_sections(drag_idx, i)
+                self._drag_data["index"] = i
+                break
+
+    def _drag_release(self, event):
+        if self._drag_data and self._drag_data.get("started"):
+            card = self._section_cards[self._drag_data["index"]][0]
+            card.configure(highlightbackground="#d1d5db", highlightthickness=1)
+            self.design.section_order = [key for _, key in self._section_cards]
+            self._render_preview()
+        self._drag_data = None
+
+    def _swap_sections(self, from_idx, to_idx):
+        cards = self._section_cards
+        cards[from_idx], cards[to_idx] = cards[to_idx], cards[from_idx]
+        for i, (card, _) in enumerate(cards):
+            card.grid_configure(row=2 + i)
+
+    def _canvas_scroll(self, event):
+        self.preview_canvas.yview_scroll(int(-event.delta / 120), "units")
+
+    def _zoom_wheel(self, event):
+        step = 10 if event.delta > 0 else -10
+        self._zoom_step(step)
+
+    def _zoom_step(self, delta):
+        self._zoom_pct = max(10, min(500, self._zoom_pct + delta))
+        self._zoom_var.set(f"{self._zoom_pct}%")
+        self._render_preview()
+
+    def _zoom_reset(self):
+        self._zoom_pct = 100
+        self._zoom_var.set("100%")
+        self._render_preview()
+
+    def _zoom_from_entry(self, _event=None):
+        raw = self._zoom_var.get().replace("%", "").strip()
+        try:
+            val = int(raw)
+            self._zoom_pct = max(10, min(500, val))
+        except ValueError:
+            pass
+        self._zoom_var.set(f"{self._zoom_pct}%")
+        self._render_preview()
+
+    def _pan_press(self, event):
+        self.preview_canvas.configure(cursor="fleur")
+        self._pan_data = {"x": event.x, "y": event.y}
+
+    def _pan_motion(self, event):
+        if not self._pan_data:
+            return
+        c = self.preview_canvas
+        sr = c.cget("scrollregion")
+        if not sr:
+            return
+        x1, y1, x2, y2 = [float(v) for v in sr.split()]
+        total_w = x2 - x1
+        total_h = y2 - y1
+        if total_w > 0:
+            dx_frac = (self._pan_data["x"] - event.x) / total_w
+            c.xview_moveto(c.xview()[0] + dx_frac)
+        if total_h > 0:
+            dy_frac = (self._pan_data["y"] - event.y) / total_h
+            c.yview_moveto(c.yview()[0] + dy_frac)
+        self._pan_data = {"x": event.x, "y": event.y}
+
+    def _pan_end(self):
+        self._pan_data = None
+        self.preview_canvas.configure(cursor="")
 
     def _text_changed(self, key: str, widget: tk.Text) -> None:
         setattr(self.design, key, widget.get("1.0", "end").strip())
@@ -577,20 +925,32 @@ class ThermalStampsApp(tk.Tk):
         margin = 28
         available_height = max(80, canvas_height - margin * 2)
         available_width = max(80, canvas_width - margin * 2)
-        scale = min(available_width / image.width, available_height / image.height, 2.6)
-        preview = image.resize((max(1, int(image.width * scale)), max(1, int(image.height * scale))), Image.Resampling.LANCZOS)
+        base_scale = min(available_width / image.width, available_height / image.height, 2.6)
+        scale = base_scale * (self._zoom_pct / 100.0)
+        pw = max(1, int(image.width * scale))
+        ph = max(1, int(image.height * scale))
+        preview = image.resize((pw, ph), Image.Resampling.LANCZOS)
         self.preview_photo = ImageTk.PhotoImage(preview)
         self.preview_canvas.delete("all")
-        # The stamp is the centerpiece: center it both horizontally and
-        # vertically in the available canvas, like a piece on a stage.
-        x = canvas_width // 2
-        y = canvas_height // 2
+
+        pad = 8
+        content_w = pw + pad * 2
+        content_h = ph + pad * 2
+        total_w = max(canvas_width, content_w + 40)
+        total_h = max(canvas_height, content_h + 40)
+        cx, cy = total_w // 2, total_h // 2
+
         self.preview_canvas.create_rectangle(
-            x - preview.width // 2 - 8, y - preview.height // 2 - 8,
-            x + preview.width // 2 + 8, y + preview.height // 2 + 8,
+            cx - pw // 2 - pad, cy - ph // 2 - pad,
+            cx + pw // 2 + pad, cy + ph // 2 + pad,
             fill="#ffffff", outline="#c6cfd3",
         )
-        self.preview_canvas.create_image(x, y, image=self.preview_photo, anchor="center")
+        self.preview_canvas.create_image(cx, cy, image=self.preview_photo, anchor="center")
+        self.preview_canvas.configure(scrollregion=(0, 0, total_w, total_h))
+
+        if total_w <= canvas_width and total_h <= canvas_height:
+            self.preview_canvas.xview_moveto(0)
+            self.preview_canvas.yview_moveto(0)
 
     # -- stamp creation --------------------------------------------------------
 
@@ -606,6 +966,7 @@ class ThermalStampsApp(tk.Tk):
             messagebox.showerror(APP_TITLE, f"No se pudo crear la estampa:\n{exc}")
             return
         self._refresh_stamps()
+        self._set_mode("administrar")
         self._select_in_tree(record.id)
         self._set_status(f"Estampa creada: {record.address_short}")
 
@@ -637,6 +998,7 @@ class ThermalStampsApp(tk.Tk):
 
         def done(last_id):
             self._refresh_stamps()
+            self._set_mode("administrar")
             if last_id:
                 self._select_in_tree(last_id)
             self._set_status(f"{count} estampas creadas.")
@@ -1082,6 +1444,10 @@ class ThermalStampsApp(tk.Tk):
 
 
 def main() -> None:
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
     app = ThermalStampsApp()
     app.mainloop()
 

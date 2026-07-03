@@ -16,8 +16,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from . import wallet
-from .renderer import StampDesign, save_stamp_image
+try:
+    from . import wallet
+    from .renderer import StampDesign, save_stamp_image
+except ImportError:
+    import wallet
+    from renderer import StampDesign, save_stamp_image
 
 
 def _base_dir() -> Path:

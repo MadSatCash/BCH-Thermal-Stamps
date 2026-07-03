@@ -6,7 +6,7 @@ __pycache__/
 .claude/
 
 # Runtime data
-app/data/
+data/
 
 # Build artifacts
 build/

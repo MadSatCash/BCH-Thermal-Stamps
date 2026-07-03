@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import textwrap
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .qrgen import make_qr_image
+try:
+    from .qrgen import make_qr_image
+except ImportError:
+    from qrgen import make_qr_image
 
 
 PAPER_WIDTH_PX = 384
@@ -31,6 +34,9 @@ class StampDesign:
     amount: str = "0.0001"
     expiry: str = "Sin vencimiento"
     footer_note: str = "BCH Thermal Stamps"
+    separator_enabled: bool = True
+    section_order: list[str] = field(default_factory=lambda: ["title", "wallet", "claim", "instructions", "details", "separator"])
+    custom_blocks: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -51,17 +57,34 @@ def render_stamp(design: StampDesign, stamp_id: str | None = None, scale: int = 
     body_font = _font(16 * draw_font_scale)
     small_font = _font(13 * draw_font_scale)
 
+    renderers = {
+        "title": lambda: _render_title(width, margin, design.title, title_font, body_font, scale),
+        "wallet": lambda: _render_qr_block(width, margin, design.wallet_label, design.wallet_qr_data, label_font, small_font, scale),
+        "claim": lambda: _render_qr_block(width, margin, design.claim_label, design.claim_qr_data, label_font, small_font, scale, subtitle="Escanea para cobrar"),
+        "instructions": lambda: _render_text_block(width, margin, design.instructions, body_font, scale),
+        "details": lambda: _render_details_block(width, margin, design, stamp_id, small_font, scale),
+        "separator": lambda: _render_separator(width, margin, scale),
+    }
+    enabled = {
+        "title": design.title_enabled, "wallet": design.wallet_enabled,
+        "claim": design.claim_enabled, "instructions": design.instructions_enabled,
+        "details": design.details_enabled, "separator": design.separator_enabled,
+    }
+
     blocks: list[Image.Image] = []
-    if design.title_enabled:
-        blocks.append(_render_title(width, margin, design.title, title_font, body_font, scale))
-    if design.wallet_enabled:
-        blocks.append(_render_qr_block(width, margin, design.wallet_label, design.wallet_qr_data, label_font, small_font, scale))
-    if design.claim_enabled:
-        blocks.append(_render_qr_block(width, margin, design.claim_label, design.claim_qr_data, label_font, small_font, scale, subtitle="Escanea para cobrar"))
-    if design.instructions_enabled:
-        blocks.append(_render_text_block(width, margin, design.instructions, body_font, scale))
-    if design.details_enabled:
-        blocks.append(_render_details_block(width, margin, design, stamp_id, small_font, scale))
+    for key in design.section_order:
+        if key in renderers:
+            if enabled.get(key, False):
+                blocks.append(renderers[key]())
+        else:
+            bd = next((b for b in design.custom_blocks if b["id"] == key), None)
+            if bd and bd.get("enabled", True):
+                if bd["type"] == "text":
+                    blocks.append(_render_text_block(width, margin, bd.get("content", ""), body_font, scale))
+                elif bd["type"] == "qr":
+                    blocks.append(_render_qr_block(width, margin, bd.get("qr_label", ""), bd.get("qr_data", ""), label_font, small_font, scale))
+                elif bd["type"] == "separator":
+                    blocks.append(_render_separator(width, margin, scale))
 
     total_height = margin
     for block in blocks:
@@ -151,7 +174,7 @@ def _render_text_block(width: int, margin: int, text: str, font: ImageFont.Image
 
 
 def _render_details_block(width: int, margin: int, design: StampDesign, stamp_id: str | None, font: ImageFont.ImageFont, scale: int) -> Image.Image:
-    height = 82 * scale
+    height = 74 * scale
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
     y = 8 * scale
@@ -166,7 +189,14 @@ def _render_details_block(width: int, margin: int, design: StampDesign, stamp_id
     for line in lines:
         _center_text(draw, line, width, y, font)
         y += 17 * scale
-    _draw_cut_line(draw, width, height - 8 * scale, scale)
+    return image
+
+
+def _render_separator(width: int, margin: int, scale: int) -> Image.Image:
+    height = 16 * scale
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    _draw_cut_line(draw, width, height // 2, scale)
     return image
 
 
