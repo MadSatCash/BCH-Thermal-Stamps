@@ -30,7 +30,7 @@ class StampDesign:
     wallet_qr_data: str = "https://selene.cash/"
     claim_label: str = "2. Cobrar esta estampa"
     claim_qr_data: str = "bitcoincash:qp000000000000000000000000000000000000000000"
-    instructions: str = "Escanea el QR de cobro con tu wallet BCH. Si necesitas una wallet, usa primero el QR superior."
+    instructions: str = "Escaneá el QR de cobro con tu wallet BCH. Si necesitás una wallet, usá primero el QR superior."
     amount: str = "0.0001"
     expiry: str = "Sin vencimiento"
     footer_note: str = "BCH Thermal Stamps"
@@ -60,7 +60,7 @@ def render_stamp(design: StampDesign, stamp_id: str | None = None, scale: int = 
     renderers = {
         "title": lambda: _render_title(width, margin, design.title, title_font, body_font, scale),
         "wallet": lambda: _render_qr_block(width, margin, design.wallet_label, design.wallet_qr_data, label_font, small_font, scale),
-        "claim": lambda: _render_qr_block(width, margin, design.claim_label, design.claim_qr_data, label_font, small_font, scale, subtitle="Escanea para cobrar"),
+        "claim": lambda: _render_qr_block(width, margin, design.claim_label, design.claim_qr_data, label_font, small_font, scale, subtitle="Escaneá para cobrar"),
         "instructions": lambda: _render_text_block(width, margin, design.instructions, body_font, scale),
         "details": lambda: _render_details_block(width, margin, design, stamp_id, small_font, scale),
         "separator": lambda: _render_separator(width, margin, scale),

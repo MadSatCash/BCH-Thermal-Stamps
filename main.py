@@ -610,6 +610,9 @@ class ThermalStampsApp(tk.Tk):
         handle.pack(side="right")
 
         if section_key is not None:
+            del_btn = ttk.Label(header, text="✕", style="Handle.TLabel", cursor="hand2")
+            del_btn.pack(side="right", padx=(0, 8))
+            del_btn.bind("<Button-1>", lambda _e, k=section_key: self._remove_block(k))
             self._section_cards.append((card, section_key))
             handle.bind("<ButtonPress-1>", lambda e, c=card: self._drag_press(e, c))
             handle.bind("<B1-Motion>", self._drag_motion)
@@ -679,7 +682,16 @@ class ThermalStampsApp(tk.Tk):
 
         frame = ttk.Frame(dialog, padding=20)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="Tipo de bloque:", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 10))
+        ttk.Label(frame, text="Agregar bloque:", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 10))
+
+        missing = [(key, SECTION_CONFIGS[key][1]) for key in SECTION_CONFIGS if key not in self.design.section_order]
+        for key, title in missing:
+            ttk.Button(frame, text=title, command=lambda k=key: self._do_add_builtin(k, dialog)).pack(fill="x", pady=(0, 6))
+
+        if missing:
+            ttk.Separator(frame).pack(fill="x", pady=(4, 10))
+            ttk.Label(frame, text="Bloque personalizado:", style="Muted.TLabel").pack(anchor="w", pady=(0, 6))
+
         ttk.Button(frame, text="Texto", command=lambda: self._do_add_block("text", dialog)).pack(fill="x", pady=(0, 6))
         ttk.Button(frame, text="QR con etiqueta", command=lambda: self._do_add_block("qr", dialog)).pack(fill="x", pady=(0, 6))
         ttk.Button(frame, text="Separador", command=lambda: self._do_add_block("separator", dialog)).pack(fill="x")
@@ -688,6 +700,11 @@ class ThermalStampsApp(tk.Tk):
         x = self.winfo_x() + (self.winfo_width() - dialog.winfo_width()) // 2
         y = self.winfo_y() + (self.winfo_height() - dialog.winfo_height()) // 2
         dialog.geometry(f"+{x}+{y}")
+
+    def _do_add_builtin(self, key, dialog):
+        dialog.destroy()
+        self.design.section_order.append(key)
+        self._rebuild_template_panel()
 
     def _do_add_block(self, block_type, dialog):
         dialog.destroy()
